@@ -36,13 +36,13 @@ void print_file_info(char *file_path, struct stat file_stats) {
         char options[10];
 
         printf("Options: \n");
-        printf("        -n for name \n");
-        printf("        -d for size \n");
-        printf("        -h for hard link count \n");
-        printf("        -m for time of last modification \n");
-        printf("        -a for access rights \n");
-        printf("        -l for create symbolic link \n");
-        printf("Enter the option: ");
+        printf("\n -n for name \n");
+        printf("\n -d for size \n");
+        printf("\n -h for hard link count \n");
+        printf("\n -m for time of last modification \n");
+        printf("\n -a for access rights \n");
+        printf("\n -l for create symbolic link \n");
+        printf("\n Enter the option: \n");
 
         scanf("%s", options);
 
