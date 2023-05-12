@@ -330,85 +330,55 @@ void directoryOptions(char *path, struct stat stats) {
     }
 }
 
-void createTxtFile(char *dirname) {
-    char *filename = malloc(strlen(dirname) + 11);
+void createTxtFile(char* dirname) {
+    char filename[strlen(dirname) + 11];
     sprintf(filename, "%s_file.txt", dirname);
+    char* args[] = {"touch", filename, NULL};
+    execvp(args[0], args);
+    perror("Failed to execute touch command!");
+    exit(EXIT_FAILURE);
+}
 
-    pid_t pid;
-    int status;
+void compileScript(char* filename, int writeEnd, int readEnd) {
+    close(readEnd); // close read end of pipe
+    dup2(writeEnd, 1); // redirect stdout to pipe
+    execlp("bash", "bash", "compile.sh", filename, NULL);
+    perror("execlp error!");
+    close(writeEnd);
+    exit(EXIT_FAILURE);
+}
 
-    pid = fork();
+void printNoOfLines(char* filename, int readEnd, int writeEnd) {
+    close(readEnd); // close read descriptor; child will write into pipe
+    dup2(writeEnd, 1); // redirect standard output to pipe write end
+    execlp("wc", "wc", "-l", NULL); // execute wc command
+    perror("execlp error!\n"); // print error message if execution fails
+    close(writeEnd);
+    exit(EXIT_FAILURE);
+}
 
-    if (pid < 0) {
-        perror("fork error");
-        exit(EXIT_FAILURE);
-    } else if (pid == 0) {
-        // Child process
-        char* args[] = {"touch", NULL};
-        args[1] = filename;
-        execvp("touch", args);
-        perror("execvp error");
-        exit(EXIT_FAILURE);
-    } else {
-        // Parent process
-        if (waitpid(pid, &status, 0) == -1) {
-            perror("waitpid error");
-            exit(EXIT_FAILURE);
-        } else {
-            printf("File created: %s\n", filename);
-        }
-    }
-
-    free(filename);
+void changeRights(char* linkname) {
+    char* args[] = {"chmod", "0760", linkname, NULL};
+    execvp(args[0], args);
+    perror("execvp failed");
+    exit(EXIT_FAILURE);
 }
 
 
-void compileScript(char* filename) {
-    pid_t pid;
-    int status;
+int main(int argc, char **argv) {
+    pid_t pidFile, pidFileOpt, pidLnk, pidLnkOpt, pidDir, pidDirOpt;
+    //int status;
+    int pfd[2];
 
-    pid = fork();
-
-    if (pid < 0) {
-        perror("fork error");
-        exit(EXIT_FAILURE);
-    } else if (pid == 0) {
-        // Child process
-        //char* args[] = {"gcc", "-o", "/dev/null", "-Wall", "-Werror", filename, NULL};
-        char* args[] = {"gcc", "-Wall", filename, NULL};
-        execvp("gcc", args);
-        perror("execvp error!");
-        exit(EXIT_FAILURE);
-    } else {
-        // Parent process
-        if (waitpid(pid, &status, 0) == -1) {
-            perror("waitpid error");
-            exit(EXIT_FAILURE);
-        } else {
-            if (WIFEXITED(status)) {
-                int exitStatus = WEXITSTATUS(status);
-                if (exitStatus == 0) {
-                    printf("Compilation successful with no errors or warnings\n");
-                } else {
-                    printf("Compilation failed with %d errors/warnings\n", exitStatus);
-                }
-            } else if (WIFSIGNALED(status)) {
-                printf("Compilation terminated by signal %d\n", WTERMSIG(status));
-            }
-        }
+    if(pipe(pfd) < 0) {
+        perror("Pipe creation error!\n");
+        exit(1);
     }
-}
 
-
-
-int main(int argc, char *argv[]) {
-    pid_t pid, pidc;
-    int status;
-    
     if(argc < 2) {
-        printf("Not enough arguments!");
+        printf("Not enough arguments!\n");
     } else {
-        for (int i = 1; i < argc; i++) {
+        for(int i = 1; i < argc; i++) {
             char *path = argv[i];
             struct stat stats;
 
@@ -417,69 +387,154 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            pid = fork();
-            if(pid < 0) {
-                perror("Error on fork!");
-                exit(1);
-            } else if(pid == 0) { // child process
-                if(S_ISREG(stats.st_mode)) {
-                    printf("\n%s - REGULAR FILE\n", argv[i]);
+            if(S_ISREG(stats.st_mode)) {
+                printf("\n%s - REGULAR FILE\n\n", argv[i]);
+
+                pidFile = fork();
+                if(pidFile < 0) {
+                    perror("Error on fork!");
+                    exit(1);
+                } else if(pidFile == 0) { // child1
                     if(strstr(path, ".c") != NULL) {
-                        pidc = fork();
-                        if(pidc < 0) {
-                            perror("Error on fork!");
-                            exit(1);
-                        } else if(pidc == 0) { // second child
-                            compileScript(path);
-                            exit(0);
-                        } else { // parent 
-                            waitpid(pidc, &status, 0);
-                            if (WIFEXITED(status)) {
-                                printf("Compile process for %s exited with status %d\n", path, WEXITSTATUS(status));
-                            } else {
-                                printf("Compile process for %s terminated abnormally\n", path);
-                            }
-                        }
-                    regularFileOptions(path, stats);
+                        compileScript(path, pfd[1], pfd[0]);
+                        exit(EXIT_FAILURE);
+                    } else {
+                        printNoOfLines(path, pfd[1], pfd[0]);
+                        exit(EXIT_FAILURE);
                     }
                 }
-                } else if(S_ISLNK(stats.st_mode)) {
-                    printf("\n%s - SYMBOLIC LINK.\n", argv[i]);
-                    symbolicLinkOptions(path, stats);
-                } else if(S_ISDIR(stats.st_mode)) {
-                    printf("\n%s - DIRECTORY\n", argv[i]);
-                    if(opendir(path) != NULL) {
-                        pidc = fork();
-                        if(pidc < 0) {
-                            perror("Error on fork!");
-                            exit(1);
-                        } else if(pidc == 0) { // second child
-                            createTxtFile(path);
-                            exit(0);
-                        } else { // parent
-                            waitpid(pidc, &status, 0);
-                            if (WIFEXITED(status)) {
-                                printf("Compile process for %s exited with status %d\n", path, WEXITSTATUS(status));
-                            } else {
-                                printf("Compile process for %s terminated abnormally\n", path);
-                            }
-                        }
-                    directoryOptions(path, stats);
 
-                } else {
-                printf("Unknown type of file!\n");
-                }   
-            } else { // parent
-                waitpid(pid, &status, 0);
-                if (WIFEXITED(status)) {
-                    printf("Child process for %s exited with status %d\n", path, WEXITSTATUS(status));
-                } else {
-                    printf("Child process for %s terminated abnormally\n", path);
+                pidFileOpt = fork();
+                if(pidFileOpt < 0) {
+                    perror("Error on fork!");
+                    exit(1);
+                } else if(pidFileOpt == 0) { //child2
+                    regularFileOptions(path, stats);
+                    exit(EXIT_FAILURE);
                 }
-            }
+
+                close(pfd[1]); // close write end of pipe
+                int status;
+                waitpid(pidFile, &status, 0);
+                waitpid(pidFileOpt, &status, 0);
+
+                if (WIFEXITED(status)) {
+                    int exit_code = WEXITSTATUS(status);
+                    int score = 0, errors = 0, warnings = 0;
+                    char buffer[1024];
+                    // read in a while
+                    int n = read(pfd[0], buffer, 1024); // read output from pipe
+
+                    if (n > 0) {
+                        buffer[n] = '\0';
+                        char *ptr = buffer;
+                        while (*ptr != '\0') {
+                            if (strstr(ptr, "Errors:") == ptr) { // change to match the format of the output
+                                errors = atoi(ptr+7); // skip "Errors: "
+                            } else if (strstr(ptr, "Warnings:") == ptr) { // change to match the format of the output
+                                warnings = atoi(ptr+9); // skip "Warnings: "
+                            }
+                            ptr = strchr(ptr, '\n');
+                            if (ptr == NULL) break;
+                            ptr++;
+                        }
+                        if (errors == 0 && warnings == 0) {
+                            score = 10;
+                        } else if (errors > 0) {
+                            score = 1;
+                        } else if (warnings > 10) {
+                            score = 2;
+                        } else {
+                            score = 2 + 8 * (10 - warnings) / 10;
+                        }
+                    }
+                    char grade[100000 + 10];
+                    sprintf(grade, "%s: %d\n", argv[i], score);
+                    int fd = open("grades.txt", O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+                    if (fd == -1) {
+                        perror("open failed");
+                        exit(EXIT_FAILURE);
+                    }
+                    if (write(fd, grade, strlen(grade)) == -1) {
+                        perror("write failed");
+                        exit(EXIT_FAILURE);
+                    }
+                    close(fd);
+                    printf("Compile process for %s exited with status %d\n", argv[i], exit_code);
+                } else {
+                    printf("Compile process for %s terminated abnormally\n", argv[i]);
+                }
+
+            } else if(S_ISLNK(stats.st_mode)) {
+                printf("\n%s - SYMBOLIC LINK.\n", argv[i]);
+
+                pidLnk = fork();
+                if(pidLnk < 0) {
+                    perror("Error on fork!");
+                    exit(1);
+                } else if(pidLnk == 0) { // child1
+                    changeRights(path);
+                    exit(EXIT_FAILURE);
+                }
+
+                pidLnkOpt = fork();
+                if(pidLnkOpt < 0) {
+                    perror("Error on fork!");
+                    exit(1);
+                } else if(pidLnkOpt == 0) { //child2
+                    symbolicLinkOptions(path, stats);
+                    exit(EXIT_FAILURE);
+                }
+
+                int status;
+                waitpid(pidLnk, &status, 0);
+                waitpid(pidLnkOpt, &status, 0);
+
+                if (WIFEXITED(status)) {
+                    int exit_code = WEXITSTATUS(status);
+                    printf("Compile process for %s exited with status %d\n", argv[i], exit_code);
+                } else {
+                    printf("Compile process for %s terminated abnormally\n", argv[i]);
+                }
+
+            } else if(S_ISDIR(stats.st_mode)) {
+                printf("\n%s - DIRECTORY\n\n", argv[i]);
+
+                pidDir = fork();
+                if(pidDir < 0) {
+                    perror("Error on fork!");
+                    exit(1);
+                } else if(pidDir == 0) { //child1
+                    createTxtFile(path);
+                    exit(EXIT_FAILURE);
+                }
+                pidDirOpt = fork();
+                if(pidDirOpt < 0) {
+                    perror("Error on fork!");
+                    exit(1);
+                } else if(pidDirOpt == 0) { //child2
+                    directoryOptions(path, stats);
+                    exit(EXIT_FAILURE);
+                }
+    
+                int status;
+                waitpid(pidDir, &status, 0);
+                waitpid(pidDirOpt, &status, 0);
+
+                if (WIFEXITED(status)) {
+                    int exit_code = WEXITSTATUS(status);
+                    printf("Compile process for %s exited with status %d\n", argv[i], exit_code);
+                } else {
+                    printf("Compile process for %s terminated abnormally\n", argv[i]);
+                }
+
+            } else {
+                printf("Unknown type of file!\n");
+            }   
 
         }
     }
 
+    //close(pfd[0]); // close read end of pipe
     return 0;
 }
